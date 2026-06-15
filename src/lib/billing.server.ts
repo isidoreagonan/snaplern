@@ -167,7 +167,13 @@ async function findBestStripeSubscription(args: {
   email?: string;
   knownCustomerId?: string | null;
 }) {
-  const stripe = createStripeClient(args.environment);
+  let stripe;
+  try {
+    stripe = createStripeClient(args.environment);
+  } catch (e: any) {
+    console.log("[Billing] Stripe non configuré, passage en mode Gratuit.");
+    return null;
+  }
   const customerIds = new Set<string>();
   const candidates: any[] = [];
 
