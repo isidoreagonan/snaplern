@@ -66,7 +66,8 @@ export const analyzeImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => AnalyzeInput.parse(data))
   .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
+    try {
+      const { supabase, userId } = context;
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("LOVABLE_API_KEY manquante");
 
