@@ -99,10 +99,11 @@ export const analyzeImage = createServerFn({ method: "POST" })
     if (data.fileType === "pdf") {
       const fileRes = await fetch(signedImage);
       if (!fileRes.ok) throw new Error("Impossible de télécharger le PDF");
-      const buf = await fileRes.arrayBuffer();
-      if (buf.byteLength > 100 * 1024 * 1024) {
+      const size = Number(fileRes.headers.get("content-length") ?? "0");
+      if (size > 100 * 1024 * 1024) {
         throw new Error("PDF trop volumineux (100 Mo max)");
       }
+      const buf = await fileRes.arrayBuffer();
       const base64 = Buffer.from(buf).toString("base64");
       parts = [
         { text: "Lis ce PDF en entier (toutes les pages) et génère un parcours d'apprentissage complet couvrant l'intégralité du document." },
@@ -137,21 +138,21 @@ export const analyzeImage = createServerFn({ method: "POST" })
     if (response.status === 402) throw new Error("Crédits IA épuisés. Recharge ton espace.");
     if (!response.ok) {
       const txt = await response.text();
-      throw new Error(`Erreur IA: ${txt.slice(0, 200)}`);
+      throw new Error(`Erreur IA HTTP ${response.status}: ${txt.slice(0, 200)}`);
     }
 
     const json = await response.json();
     const content = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!content) throw new Error("Réponse IA vide");
+    if (!content) throw new Error(`Réponse IA vide: ${JSON.stringify(json).slice(0, 200)}`);
 
     let analysis: AnalysisResult;
     try {
       analysis = JSON.parse(content);
     } catch {
-      throw new Error("Réponse IA invalide");
+      throw new Error(`Réponse IA invalide: ${content.slice(0, 200)}`);
     }
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("learning_sessions")
       .update({
         title: analysis.title?.slice(0, 200) ?? "Sans titre",
@@ -162,6 +163,8 @@ export const analyzeImage = createServerFn({ method: "POST" })
       })
       .eq("id", data.sessionId)
       .eq("user_id", userId);
+
+    if (updateError) throw new Error(`Erreur DB Update: ${updateError.message}`);
 
     // Seed flashcards
     if (analysis.flashcards?.length) {
@@ -176,4 +179,17 @@ export const analyzeImage = createServerFn({ method: "POST" })
     }
 
     return { ok: true as const, analysis };
-  });
+  } catch (err: any) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error("AnalyzeImage Error:", errorMsg);
+    try {
+      await context.supabase.from("learning_sessions").update({
+        status: "error",
+        title: `Erreur: ${errorMsg}`.slice(0, 200)
+      }).eq("id", data.sessionId).eq("user_id", context.userId);
+    } catch (dbErr) {
+      console.error("Failed to update error status:", dbErr);
+    }
+    throw new Error(errorMsg);
+  }
+});
