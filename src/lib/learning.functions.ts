@@ -85,10 +85,12 @@ export const analyzeImage = createServerFn({ method: "POST" })
       if (size > 15 * 1024 * 1024) {
         throw new Error("Fichier > 15 Mo : passe à Pro pour téléverser jusqu'à 100 Mo.");
       }
-      const { data: quota } = await supabase.rpc("consume_upload_quota", { p_limit: 3 });
-      const row = Array.isArray(quota) ? quota[0] : quota;
-      if (!row?.allowed) {
-        throw new Error("Limite atteinte : 3 analyses / mois en plan Gratuit. Passe à Pro pour l'illimité.");
+      const { data: quota, error: rpcError } = await supabase.rpc("consume_upload_quota", { p_limit: 3 });
+      if (!rpcError) {
+        const row = Array.isArray(quota) ? quota[0] : quota;
+        if (row && row.allowed === false) {
+          throw new Error("Limite atteinte : 3 analyses / mois en plan Gratuit. Passe à Pro pour l'illimité.");
+        }
       }
     }
 
