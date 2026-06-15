@@ -92,8 +92,8 @@ export const analyzeImage = createServerFn({ method: "POST" })
       }
     }
 
-    // Build user content: image_url for images, file (base64) for PDFs
-    let userContent: unknown;
+    // Build user content using native Gemini format
+    let parts: any[];
     if (data.fileType === "pdf") {
       const fileRes = await fetch(signedImage);
       if (!fileRes.ok) throw new Error("Impossible de télécharger le PDF");
@@ -102,37 +102,32 @@ export const analyzeImage = createServerFn({ method: "POST" })
         throw new Error("PDF trop volumineux (100 Mo max)");
       }
       const base64 = Buffer.from(buf).toString("base64");
-      userContent = [
-        { type: "text", text: "Lis ce PDF en entier (toutes les pages) et génère un parcours d'apprentissage complet couvrant l'intégralité du document." },
-        {
-          type: "file",
-          file: {
-            filename: "document.pdf",
-            file_data: `data:application/pdf;base64,${base64}`,
-          },
-        },
+      parts = [
+        { text: "Lis ce PDF en entier (toutes les pages) et génère un parcours d'apprentissage complet couvrant l'intégralité du document." },
+        { inlineData: { mimeType: "application/pdf", data: base64 } }
       ];
     } else {
-      userContent = [
-        { type: "text", text: "Analyse cette image et génère un parcours d'apprentissage complet." },
-        { type: "image_url", image_url: { url: signedImage } },
+      const fileRes = await fetch(signedImage);
+      if (!fileRes.ok) throw new Error("Impossible de télécharger l'image");
+      const buf = await fileRes.arrayBuffer();
+      const base64 = Buffer.from(buf).toString("base64");
+      const mimeType = signedImage.toLowerCase().includes(".png") ? "image/png" : 
+                       signedImage.toLowerCase().includes(".webp") ? "image/webp" : "image/jpeg";
+      parts = [
+        { text: "Analyse cette image et génère un parcours d'apprentissage complet." },
+        { inlineData: { mimeType, data: base64 } }
       ];
     }
 
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        // Flash is 5-10x faster than Pro on PDFs and handles up to ~50 pages well.
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userContent },
-        ],
-        response_format: { type: "json_object" },
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseMimeType: "application/json" }
       }),
     });
 
@@ -144,7 +139,7 @@ export const analyzeImage = createServerFn({ method: "POST" })
     }
 
     const json = await response.json();
-    const content = json.choices?.[0]?.message?.content;
+    const content = json.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!content) throw new Error("Réponse IA vide");
 
     let analysis: AnalysisResult;
